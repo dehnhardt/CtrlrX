@@ -370,6 +370,40 @@ void CtrlrPanel::sendSnapshotOnLoad()
 	}
 }
 
+bool CtrlrPanel::isLoading()
+{
+    const ScopedReadLock lock (panelLock);
+
+    // 1. Structural Gates: Immediate block if loading a DAW project or preset bank
+    if (restoreStateStatus || programState)
+    {
+        return true;
+    }
+
+    // 2. Core Bootstrap Gate: If C++ is actively inside bootstrapPanel(), ALWAYS block
+    if (boostrapStateStatus)
+    {
+        return true;
+    }
+
+    // 3. The Asynchronous Cooldown Gate (Your Timer Rule)
+    if (isBootstrapTimerActive)
+    {
+        uint32 currentTime = juce::Time::getMillisecondCounter();
+        
+        // Use a tight 300ms to 500ms cooldown window AFTER boostrapStateStatus drops to false
+        if (currentTime - bootstrapStartTime > 400)
+        {
+            const_cast<CtrlrPanel*>(this)->isBootstrapTimerActive = false;
+			//juce::Logger::writeToLog("[CtrlrX Engine] >>> 400ms Cooldown Passed. GATE IS OPEN! <<<");
+            return false;
+        }
+        
+        return true;
+    }
+
+    return false;
+}
 void CtrlrPanel::bootstrapPanel(const bool setInitialProgram)
 {
     _DBG("CtrlrPanel::bootstrapPanel");
@@ -377,7 +411,9 @@ void CtrlrPanel::bootstrapPanel(const bool setInitialProgram)
 		return;
 
 	boostrapStateStatus = true;
-
+	// Capture the exact system time when boot started
+    bootstrapStartTime = juce::Time::getMillisecondCounter();
+    isBootstrapTimerActive = true;
 	for (int i=0; i<ctrlrModulators.size(); i++)
 	{
 		ctrlrModulators[i]->allModulatorsInitialized();
@@ -410,6 +446,8 @@ void CtrlrPanel::bootstrapPanel(const bool setInitialProgram)
 	}
 
 	boostrapStateStatus = false;
+	bootstrapStartTime = juce::Time::getMillisecondCounter();
+    isBootstrapTimerActive = true;
 }
 
 CtrlrPanelEditor *CtrlrPanel::getEditor(const bool createNewEditorIfNeeded)
@@ -1012,7 +1050,7 @@ const String CtrlrPanel::getUniqueModulatorName(const String &proposedName)
 		nameToLookFor	= basename + "-" + String(marker);
 	}
 
-	while (getModulator(nameToLookFor))
+	while (getModulator(nameToLookFor, true))
 	{
 		nameToLookFor = basename + "-" + String(++marker);
 	}
@@ -1158,7 +1196,7 @@ void CtrlrPanel::setProgram(ValueTree programTree, const bool sendSnapshotNow)
 		{
 			if (program.getChild(i).hasType(Ids::value))
 			{
-				CtrlrModulator *m = getModulator (program.getChild(i).getProperty(Ids::name));
+				CtrlrModulator *m = getModulator (program.getChild(i).getProperty(Ids::name), true);
 				if (m)
 				{
 					m->setRestoreState (true);
@@ -1856,7 +1894,13 @@ const Array<int,CriticalSection> CtrlrPanel::globalsFromString(const String &glo
 
 CtrlrModulator* CtrlrPanel::getModulator (const String& name) const
 {
-	// return (modulatorsByName[name]);
+	return getModulator(name, true);
+} // this is the default version of the method, as found probably in nearly every panel. We don't want to break it!
+
+// Update this line to match the header signature (minus the default "= true")
+CtrlrModulator *CtrlrPanel::getModulator(const String &name, bool forwardToComponents) const
+{
+  	// return (modulatorsByName[name]);
 	for (int i=0; i<ctrlrModulators.size(); i++)
 	{
 		if (ctrlrModulators[i]->getProperty (Ids::name) == name)
